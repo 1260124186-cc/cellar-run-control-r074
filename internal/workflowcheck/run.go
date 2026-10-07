@@ -7,6 +7,7 @@ import (
 
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/clock"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/httpapi"
+	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/metrics"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/service"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/storage"
 )
@@ -22,7 +23,8 @@ func Run(name string) error {
 	if err != nil {
 		return err
 	}
-	app := service.New(store, clock.System{})
+	timeSource := clock.System{}
+	app := service.New(store, timeSource, metrics.NewRecorder(timeSource))
 	server := httptest.NewServer(httpapi.NewHandler(app))
 	defer server.Close()
 	api := newClient(server.URL)
@@ -38,6 +40,10 @@ func Run(name string) error {
 		}
 	case "observations-completion":
 		if err := observationsCompletion(api); err != nil {
+			return err
+		}
+	case "metrics-dashboard":
+		if err := metricsDashboard(api); err != nil {
 			return err
 		}
 	default:

@@ -15,10 +15,11 @@ import (
 const stateFileName = "state.json"
 
 type Store struct {
-	mu       sync.RWMutex
-	path     string
-	snapshot domain.Snapshot
-	now      func() time.Time
+	mu             sync.RWMutex
+	path           string
+	snapshot       domain.Snapshot
+	now            func() time.Time
+	commitObserver func(time.Duration, error)
 }
 
 func Open(dataDir string) (*Store, error) {
@@ -140,6 +141,16 @@ func (s *Store) Revision() int64 {
 	return s.snapshot.Revision
 }
 
+// SetCommitObserver registers a callback that is invoked exactly once per
+// snapshot commit attempt with the commit duration and its outcome, whether
+// the commit succeeded or failed. The callback runs while the store lock is
+// held, so it must be fast and must not call back into the store.
+func (s *Store) SetCommitObserver(observer func(time.Duration, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.commitObserver = observer
+}
+
 func (s *Store) View(visitor func(domain.Snapshot) error) error {
 	s.mu.RLock()
 	copied := s.snapshot.Clone()
@@ -161,8 +172,13 @@ func (s *Store) Update(expected *int64, mutate func(*domain.Snapshot) error) err
 	}
 	candidate.Revision = s.snapshot.Revision + 1
 	candidate.UpdatedAt = s.now()
-	if err := writeSnapshot(s.path, candidate); err != nil {
-		return domain.NewError(domain.CodeStorage, err.Error())
+	commitStarted := time.Now()
+	commitErr := writeSnapshot(s.path, candidate)
+	if s.commitObserver != nil {
+		s.commitObserver(time.Since(commitStarted), commitErr)
+	}
+	if commitErr != nil {
+		return domain.NewError(domain.CodeStorage, commitErr.Error())
 	}
 	s.snapshot = candidate
 	return nil

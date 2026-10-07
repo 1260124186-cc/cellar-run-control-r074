@@ -11,13 +11,14 @@ func NewHandler(app *service.Service) http.Handler {
 	registerFormulaRoutes(mux, app)
 	registerVesselRoutes(mux, app)
 	registerRunRoutes(mux, app)
+	registerMetricsRoutes(mux, app)
 	mux.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
 		writeJSON(response, http.StatusOK, map[string]any{
 			"status":   "ok",
 			"revision": app.Revision(),
 		})
 	})
-	return withRecovery(mux)
+	return withRequestMetrics(app.Metrics(), withRecovery(mux))
 }
 
 func withRecovery(next http.Handler) http.Handler {

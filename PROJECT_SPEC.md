@@ -160,6 +160,8 @@ domain rules, and snapshot storage.
 - `internal/service`: use-case orchestration and revision coordination.
 - `internal/storage`: snapshot repository, atomic replacement, and locking.
 - `internal/httpapi`: routing, strict JSON decoding, error mapping, and health.
+- `internal/metrics`: process and cellar business metrics with monotonic
+  counters, statistics windows, and fixed-snapshot dashboard reads.
 - `internal/workflowcheck`: real HTTP workflow checks used by the executable.
 
 The dependency direction is:
@@ -168,9 +170,13 @@ The dependency direction is:
 
 `service -> storage`
 
+`service/httpapi -> metrics -> domain`
+
 `storage -> domain`
 
-The domain package does not import outer packages.
+The domain package does not import outer packages. The metrics package does
+not import service, storage, or httpapi; storage reports commit outcomes
+through a callback so it stays decoupled from metrics.
 
 ## API Behavior
 
@@ -191,6 +197,15 @@ rejects a stale write instead of overwriting newer state.
 
 `GET /healthz` returns process health and the current snapshot revision.
 
+`GET /v1/metrics/dashboard` returns a fixed point-in-time view of process
+and cellar business metrics: request outcomes, snapshot commit attempts
+with per-commit durations, fermenting runs, and runs and vessels by state.
+Each metric group carries the start and end of its statistics window.
+Counters are monotonic within a window, commit failures are counted exactly
+once, and business gauges are sampled from one consistent snapshot
+revision. Metrics live in memory only; reading the dashboard never mutates
+business records.
+
 ## Persistence And Concurrency
 
 The configured data directory contains `state.json`. Writes are serialized by
@@ -210,13 +225,14 @@ task owns systematic tests for validation boundaries, state transitions,
 numeric calculations, stale revisions, storage failures, and concurrent
 reservation attempts.
 
-The current build command is `go build ./...`. Three bounded production checks
+The current build command is `go build ./...`. Four bounded production checks
 start the real HTTP handler, issue real JSON requests, check success and failure
 behavior, and exit without external services:
 
 - `go run ./cmd/fermentctl check formula-approval`
 - `go run ./cmd/fermentctl check vessel-run-lifecycle`
 - `go run ./cmd/fermentctl check observations-completion`
+- `go run ./cmd/fermentctl check metrics-dashboard`
 
 ## Scope Limits
 

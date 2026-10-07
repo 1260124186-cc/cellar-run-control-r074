@@ -54,6 +54,7 @@ internal/clock                 time boundary
 internal/config                environment configuration
 internal/domain                entities, validation, transitions, metrics
 internal/httpapi               HTTP routes, JSON decoding, errors
+internal/metrics               process and cellar metrics for the dashboard
 internal/service               use-case orchestration
 internal/storage               revisioned snapshot persistence
 internal/workflowcheck         real HTTP production checks
@@ -94,6 +95,10 @@ Run workflow:
 - `POST /v1/runs/{id}/complete`
 - `POST /v1/runs/{id}/abort`
 
+Metrics dashboard:
+
+- `GET /v1/metrics/dashboard`
+
 Writes accept an optional `X-Expected-Version` header. Errors use a stable
 shape:
 
@@ -107,6 +112,35 @@ shape:
 }
 ```
 
+## Metrics Dashboard
+
+`GET /v1/metrics/dashboard` returns a fixed point-in-time snapshot of the
+process and cellar business metrics:
+
+- `requests`: completed HTTP requests, split into `succeeded` (status below
+  400) and `failed` (400 and above). `total` always equals the sum of both.
+- `snapshot_commits`: snapshot commit attempts with per-commit durations.
+  Every attempt adds exactly one duration sample and increments exactly one
+  of `succeeded` or `failed`, including failed commits; the view exposes the
+  last, maximum, total, and average duration in microseconds.
+- `cellar`: fermenting run count, runs and vessels by lifecycle state, and
+  the snapshot `revision` the gauges were sampled from. State maps always
+  contain every known state and sum to the matching total.
+
+Every metric group carries a `window` with the `started_at` and `ended_at`
+of its statistics period. Counters are monotonic within a window: they use
+saturating adds that cannot roll over, and a process restart begins a new
+window whose `started_at` makes the reset visible instead of looking like a
+backwards count. Cellar gauges are sampled from one consistent snapshot
+clone, so vessel or run state changes during the read cannot tear or
+double-count the per-state totals.
+
+Recording is constant-time (in-memory counter updates), so metric
+collection does not slow down observation writes, and metrics are
+deliberately not persisted into `state.json`. Reading the dashboard only
+reads state: it takes no write lock, bumps no revision, and commits no
+snapshot.
+
 ## Workflow Checks
 
 Run each production workflow check separately:
@@ -115,6 +149,7 @@ Run each production workflow check separately:
 go run ./cmd/fermentctl check formula-approval
 go run ./cmd/fermentctl check vessel-run-lifecycle
 go run ./cmd/fermentctl check observations-completion
+go run ./cmd/fermentctl check metrics-dashboard
 ```
 
 Each check creates a temporary snapshot directory, starts the real HTTP

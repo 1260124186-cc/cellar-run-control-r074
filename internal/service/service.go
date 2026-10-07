@@ -5,19 +5,25 @@ import (
 
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/clock"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
+	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/metrics"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/storage"
 )
 
 type Service struct {
-	store *storage.Store
-	clock clock.Clock
+	store   *storage.Store
+	clock   clock.Clock
+	metrics *metrics.Recorder
 }
 
-func New(store *storage.Store, timeSource clock.Clock) *Service {
+func New(store *storage.Store, timeSource clock.Clock, recorder *metrics.Recorder) *Service {
 	if timeSource == nil {
 		timeSource = clock.System{}
 	}
-	return &Service{store: store, clock: timeSource}
+	if recorder == nil {
+		recorder = metrics.NewRecorder(timeSource)
+	}
+	store.SetCommitObserver(recorder.ObserveCommit)
+	return &Service{store: store, clock: timeSource, metrics: recorder}
 }
 
 func (s *Service) Revision() int64 {
