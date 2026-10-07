@@ -5,19 +5,30 @@ import (
 
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/clock"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
+	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/metrics"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/storage"
 )
 
 type Service struct {
-	store *storage.Store
-	clock clock.Clock
+	store   *storage.Store
+	clock   clock.Clock
+	metrics *metrics.Registry
 }
 
-func New(store *storage.Store, timeSource clock.Clock) *Service {
+func New(store *storage.Store, timeSource clock.Clock, registry *metrics.Registry) *Service {
 	if timeSource == nil {
 		timeSource = clock.System{}
 	}
-	return &Service{store: store, clock: timeSource}
+	if registry == nil {
+		registry = metrics.NewRegistry(timeSource.Now)
+	}
+	return &Service{store: store, clock: timeSource, metrics: registry}
+}
+
+// Metrics exposes the process metric registry used by the HTTP instrumentation
+// and the storage commit hook.
+func (s *Service) Metrics() *metrics.Registry {
+	return s.metrics
 }
 
 func (s *Service) Revision() int64 {

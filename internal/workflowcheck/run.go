@@ -7,6 +7,7 @@ import (
 
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/clock"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/httpapi"
+	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/metrics"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/service"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/storage"
 )
@@ -18,11 +19,19 @@ func Run(name string) error {
 	}
 	defer os.RemoveAll(dataDir)
 
-	store, err := storage.Open(dataDir)
+	appClock := clock.System{}
+	registry := metrics.NewRegistry(appClock.Now)
+	store, err := storage.Open(dataDir, storage.WithCommitObserver(func(outcome storage.CommitOutcome) {
+		registry.RecordCommit(metrics.CommitResult{
+			Revision: outcome.Revision,
+			Success:  outcome.Success,
+			Duration: outcome.Duration,
+		})
+	}))
 	if err != nil {
 		return err
 	}
-	app := service.New(store, clock.System{})
+	app := service.New(store, appClock, registry)
 	server := httptest.NewServer(httpapi.NewHandler(app))
 	defer server.Close()
 	api := newClient(server.URL)
@@ -38,6 +47,10 @@ func Run(name string) error {
 		}
 	case "observations-completion":
 		if err := observationsCompletion(api); err != nil {
+			return err
+		}
+	case "production-dashboard":
+		if err := productionDashboard(api, dataDir); err != nil {
 			return err
 		}
 	default:

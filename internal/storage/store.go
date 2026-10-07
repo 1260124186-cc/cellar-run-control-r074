@@ -14,14 +14,41 @@ import (
 
 const stateFileName = "state.json"
 
-type Store struct {
-	mu       sync.RWMutex
-	path     string
-	snapshot domain.Snapshot
-	now      func() time.Time
+// CommitOutcome describes one durable snapshot commit attempt to an observer.
+type CommitOutcome struct {
+	Revision int64
+	Success  bool
+	Duration time.Duration
 }
 
-func Open(dataDir string) (*Store, error) {
+// CommitObserver is notified after each durable commit attempt. Observers must
+// be cheap and non-blocking; the in-process metrics hook uses atomics only.
+type CommitObserver func(CommitOutcome)
+
+// Option customizes a Store at open time.
+type Option func(*Store)
+
+// WithCommitObserver attaches a hook that fires once per real persistence
+// attempt, after the business lock is released. Mutations rejected before
+// persistence (validation, revision conflict) do not trigger it, so a failed
+// request is never mistaken for a failed commit.
+func WithCommitObserver(observer CommitObserver) Option {
+	return func(store *Store) {
+		if observer != nil {
+			store.commitObserver = observer
+		}
+	}
+}
+
+type Store struct {
+	mu             sync.RWMutex
+	path           string
+	snapshot       domain.Snapshot
+	now            func() time.Time
+	commitObserver CommitObserver
+}
+
+func Open(dataDir string, options ...Option) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
@@ -29,6 +56,9 @@ func Open(dataDir string) (*Store, error) {
 		path:     filepath.Join(dataDir, stateFileName),
 		snapshot: domain.EmptySnapshot(),
 		now:      func() time.Time { return time.Now().UTC() },
+	}
+	for _, option := range options {
+		option(store)
 	}
 	if err := store.load(); err != nil {
 		return nil, err
@@ -148,24 +178,41 @@ func (s *Store) View(visitor func(domain.Snapshot) error) error {
 }
 
 func (s *Store) Update(expected *int64, mutate func(*domain.Snapshot) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var outcome *CommitOutcome
+	err := func() error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
 
-	if expected != nil && *expected != s.snapshot.Revision {
-		return domain.NewError(domain.CodeRevisionConflict,
-			"the supplied revision does not match the current snapshot")
+		if expected != nil && *expected != s.snapshot.Revision {
+			return domain.NewError(domain.CodeRevisionConflict,
+				"the supplied revision does not match the current snapshot")
+		}
+		candidate := s.snapshot.Clone()
+		if err := mutate(&candidate); err != nil {
+			return err
+		}
+		candidate.Revision = s.snapshot.Revision + 1
+		candidate.UpdatedAt = s.now()
+
+		started := time.Now()
+		commitErr := writeSnapshot(s.path, candidate)
+		outcome = &CommitOutcome{
+			Revision: candidate.Revision,
+			Success:  commitErr == nil,
+			Duration: time.Since(started),
+		}
+		if commitErr != nil {
+			return domain.NewError(domain.CodeStorage, commitErr.Error())
+		}
+		s.snapshot = candidate
+		return nil
+	}()
+	// Notify outside the business lock: metric recording is atomic and must not
+	// delay observation writes or hold persistence serialization hostage.
+	if outcome != nil && s.commitObserver != nil {
+		s.commitObserver(*outcome)
 	}
-	candidate := s.snapshot.Clone()
-	if err := mutate(&candidate); err != nil {
-		return err
-	}
-	candidate.Revision = s.snapshot.Revision + 1
-	candidate.UpdatedAt = s.now()
-	if err := writeSnapshot(s.path, candidate); err != nil {
-		return domain.NewError(domain.CodeStorage, err.Error())
-	}
-	s.snapshot = candidate
-	return nil
+	return err
 }
 
 func (s *Store) Execute(mutator func(*domain.Snapshot) error) error {

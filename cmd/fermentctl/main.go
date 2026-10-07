@@ -13,6 +13,7 @@ import (
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/clock"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/config"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/httpapi"
+	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/metrics"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/service"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/storage"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/workflowcheck"
@@ -57,11 +58,19 @@ func serve() error {
 	if err := cfg.EnsureDataDir(); err != nil {
 		return err
 	}
-	store, err := storage.Open(cfg.DataDir)
+	appClock := clock.System{}
+	registry := metrics.NewRegistry(appClock.Now)
+	store, err := storage.Open(cfg.DataDir, storage.WithCommitObserver(func(outcome storage.CommitOutcome) {
+		registry.RecordCommit(metrics.CommitResult{
+			Revision: outcome.Revision,
+			Success:  outcome.Success,
+			Duration: outcome.Duration,
+		})
+	}))
 	if err != nil {
 		return err
 	}
-	app := service.New(store, clock.System{})
+	app := service.New(store, appClock, registry)
 	server := &http.Server{
 		Addr:              cfg.Address,
 		Handler:           httpapi.NewHandler(app),

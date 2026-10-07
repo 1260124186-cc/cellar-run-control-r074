@@ -24,14 +24,19 @@
       "responsibility": "entities, validation, state transitions, and metrics"
     },
     {
+      "id": "metrics",
+      "path": "internal/metrics",
+      "responsibility": "collect lock-free process request and snapshot-commit metrics as fixed snapshots"
+    },
+    {
       "id": "service",
       "path": "internal/service",
-      "responsibility": "orchestrate formulas, vessels, runs, and observations"
+      "responsibility": "orchestrate formulas, vessels, runs, observations, and dashboard sampling"
     },
     {
       "id": "storage",
       "path": "internal/storage",
-      "responsibility": "persist and load revisioned JSON snapshots atomically"
+      "responsibility": "persist and load revisioned JSON snapshots atomically and report commit outcomes"
     },
     {
       "id": "httpapi",
@@ -111,6 +116,27 @@
         "httpapi",
         "service",
         "domain",
+        "storage"
+      ]
+    },
+    {
+      "id": "production-dashboard",
+      "name": "Drive success and failure traffic and read the fixed metrics dashboard",
+      "entry": "GET /v1/metrics",
+      "steps": [
+        "read a zeroed dashboard before business activity",
+        "create an approved formula, vessel, and fermenting run, then trigger rejected requests",
+        "verify request totals, commit rolling statistics, fermenting runs, and vessel state gauges",
+        "confirm monotonic counters and unchanged revision across repeated reads",
+        "reopen the data directory to confirm counters reset while business state survives"
+      ],
+      "success": "returns a consistent fixed dashboard with per-series accumulation intervals",
+      "failure": "rejected requests count as failed requests but never as failed commits",
+      "verification": "the check issues real HTTP requests and reopens the snapshot directory in a fresh context",
+      "module_ids": [
+        "httpapi",
+        "service",
+        "metrics",
         "storage"
       ]
     }

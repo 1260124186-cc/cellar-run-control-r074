@@ -54,16 +54,44 @@ internal/clock                 time boundary
 internal/config                environment configuration
 internal/domain                entities, validation, transitions, metrics
 internal/httpapi               HTTP routes, JSON decoding, errors
-internal/service               use-case orchestration
+internal/metrics               lock-free process and commit metric registry
+internal/service               use-case orchestration and dashboard sampling
 internal/storage               revisioned snapshot persistence
 internal/workflowcheck         real HTTP production checks
 ```
+
+## Production Dashboard
+
+`GET /v1/metrics` returns a fixed snapshot of:
+
+- process request outcomes (`succeeded`, `failed`, `total`) since process start;
+- the count of currently fermenting runs and vessels in every vessel state,
+  sampled from one consistent repository snapshot, so a state change during
+  sampling can never double count or miss an aggregate;
+- per-snapshot-commit durations, including the bounded rolling window's
+  min/max/average, the latest commit, and cumulative attempt/success/failure
+  totals.
+
+Every series carries its accumulation `interval` (`started_at`/`ended_at`).
+Recording metrics uses atomic operations only and never takes the persistence
+lock, so collection cannot delay observation writes. Only real durable commit
+attempts are reported: requests rejected by validation or revision checks are
+counted as failed requests but never as failed commits. Reading the dashboard
+is a pure read and never changes business records or the revision. Cumulative
+counters start at process start and reset on restart (business state in the
+snapshot survives), preventing rollback or double counting across restarts;
+commit durations use a bounded rolling ring so they never grow unbounded or
+move backwards over a long run.
 
 ## Public API
 
 Health:
 
 - `GET /healthz`
+
+Dashboard:
+
+- `GET /v1/metrics`
 
 Formula workflow:
 
@@ -115,6 +143,7 @@ Run each production workflow check separately:
 go run ./cmd/fermentctl check formula-approval
 go run ./cmd/fermentctl check vessel-run-lifecycle
 go run ./cmd/fermentctl check observations-completion
+go run ./cmd/fermentctl check production-dashboard
 ```
 
 Each check creates a temporary snapshot directory, starts the real HTTP

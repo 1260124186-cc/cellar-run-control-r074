@@ -157,9 +157,13 @@ domain rules, and snapshot storage.
 - `internal/config`: environment and command-line configuration.
 - `internal/clock`: deterministic clock boundary for production and checks.
 - `internal/domain`: entities, validation, state transitions, and metrics.
-- `internal/service`: use-case orchestration and revision coordination.
-- `internal/storage`: snapshot repository, atomic replacement, and locking.
-- `internal/httpapi`: routing, strict JSON decoding, error mapping, and health.
+- `internal/metrics`: lock-free process request and snapshot-commit metrics.
+- `internal/service`: use-case orchestration, dashboard sampling, and revision
+  coordination.
+- `internal/storage`: snapshot repository, atomic replacement, commit
+  observation, and locking.
+- `internal/httpapi`: routing, strict JSON decoding, error mapping, request
+  counting, and health.
 - `internal/workflowcheck`: real HTTP workflow checks used by the executable.
 
 The dependency direction is:
@@ -168,9 +172,13 @@ The dependency direction is:
 
 `service -> storage`
 
+`service -> metrics`
+
 `storage -> domain`
 
-The domain package does not import outer packages.
+The domain package does not import outer packages. The metrics package imports
+no project package and is wired at the executable boundary; storage reports
+commit outcomes through a narrow observer hook instead of importing metrics.
 
 ## API Behavior
 
@@ -190,6 +198,17 @@ Write requests may include `X-Expected-Version`. When present, the service
 rejects a stale write instead of overwriting newer state.
 
 `GET /healthz` returns process health and the current snapshot revision.
+
+`GET /v1/metrics` returns a fixed read-only dashboard snapshot. It exposes
+process request success/failure totals since startup, currently fermenting
+runs, vessel counts for every vessel state, and snapshot commit durations with
+rolling min/max/average and cumulative attempt totals. Each series reports its
+own accumulation interval (`started_at`/`ended_at`). Metric recording is
+atomic and never holds the persistence lock; only durable commit attempts are
+reported as commit outcomes, and reading the dashboard performs no business
+write. Cumulative counters reset at process start while the persisted business
+snapshot survives, and the commit duration series uses a bounded rolling ring
+so totals cannot roll back, double count, or grow without bound.
 
 ## Persistence And Concurrency
 
@@ -217,6 +236,7 @@ behavior, and exit without external services:
 - `go run ./cmd/fermentctl check formula-approval`
 - `go run ./cmd/fermentctl check vessel-run-lifecycle`
 - `go run ./cmd/fermentctl check observations-completion`
+- `go run ./cmd/fermentctl check production-dashboard`
 
 ## Scope Limits
 
